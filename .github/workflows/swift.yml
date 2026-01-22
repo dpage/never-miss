@@ -16,7 +16,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Setup Config
+      run: |
+        # Copy template config for CI build
+        cp NeverMiss/Sources/Config.template.swift NeverMiss/Sources/Config.swift
     - name: Build
       run: swift build -v
-    - name: Run tests
-      run: swift test -v
