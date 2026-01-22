@@ -65,6 +65,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "NeverMiss Settings"
         window.styleMask = [.titled, .closable]
+        window.setFrameAutosaveName("")  // Disable frame autosave to avoid warning
         window.setContentSize(NSSize(width: 500, height: 600))
         window.center()
         window.isReleasedWhenClosed = false

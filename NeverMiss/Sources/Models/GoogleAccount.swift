@@ -48,13 +48,9 @@ struct GoogleAccount: Identifiable, Codable {
     }
 
     static func saveAll(_ accounts: [GoogleAccount]) {
-        print("[NeverMiss] Saving \(accounts.count) accounts")
-
         // Save account metadata to UserDefaults (without tokens)
         var accountsToSave = accounts
         for i in accountsToSave.indices {
-            print("[NeverMiss] Saving account: \(accounts[i].email)")
-
             // Save tokens to Keychain
             KeychainHelper.saveTokens(
                 accessToken: accounts[i].accessToken,
@@ -72,9 +68,6 @@ struct GoogleAccount: Identifiable, Codable {
         if let data = try? JSONEncoder().encode(accountsToSave) {
             UserDefaults.standard.set(data, forKey: accountsKey)
             UserDefaults.standard.synchronize()
-            print("[NeverMiss] Accounts saved to UserDefaults")
-        } else {
-            print("[NeverMiss] ERROR: Failed to encode accounts")
         }
     }
 

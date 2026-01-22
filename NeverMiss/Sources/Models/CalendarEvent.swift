@@ -68,10 +68,8 @@ extension CalendarEvent {
 
         // Filter out non-meeting event types (working location, out of office, focus time)
         if let eventType = json["eventType"] as? String {
-            print("[NeverMiss] Event '\(summary)' has eventType: \(eventType)")
             let excludedTypes = ["workinglocation", "outofoffice", "focustime"]
             if excludedTypes.contains(eventType.lowercased()) {
-                print("[NeverMiss] Filtering out event '\(summary)' (eventType: \(eventType))")
                 return nil
             }
         }

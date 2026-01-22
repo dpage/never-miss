@@ -2,6 +2,7 @@ import Foundation
 import AuthenticationServices
 import AppKit
 
+@MainActor
 class GoogleAuthService: NSObject {
     private var authSession: ASWebAuthenticationSession?
     private weak var appState: AppState?
@@ -123,32 +124,30 @@ class GoogleAuthService: NSObject {
 
     private func performOAuthFlow(authURL: URL) async throws -> URL {
         return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.main.async { [weak self] in
-                self?.authSession = ASWebAuthenticationSession(
-                    url: authURL,
-                    callbackURLScheme: Config.reversedClientID
-                ) { callbackURL, error in
-                    if let error = error {
-                        if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
-                            continuation.resume(throwing: AuthError.userCancelled)
-                        } else {
-                            continuation.resume(throwing: AuthError.authSessionFailed(error))
-                        }
-                        return
+            self.authSession = ASWebAuthenticationSession(
+                url: authURL,
+                callbackURLScheme: Config.reversedClientID
+            ) { callbackURL, error in
+                if let error = error {
+                    if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                        continuation.resume(throwing: AuthError.userCancelled)
+                    } else {
+                        continuation.resume(throwing: AuthError.authSessionFailed(error))
                     }
-
-                    guard let callbackURL = callbackURL else {
-                        continuation.resume(throwing: AuthError.noCallback)
-                        return
-                    }
-
-                    continuation.resume(returning: callbackURL)
+                    return
                 }
 
-                self?.authSession?.presentationContextProvider = self
-                self?.authSession?.prefersEphemeralWebBrowserSession = false
-                self?.authSession?.start()
+                guard let callbackURL = callbackURL else {
+                    continuation.resume(throwing: AuthError.noCallback)
+                    return
+                }
+
+                continuation.resume(returning: callbackURL)
             }
+
+            self.authSession?.presentationContextProvider = self
+            self.authSession?.prefersEphemeralWebBrowserSession = false
+            self.authSession?.start()
         }
     }
 
@@ -176,9 +175,6 @@ class GoogleAuthService: NSObject {
             body["client_secret"] = Config.googleClientSecret
         }
 
-        print("[NeverMiss] Token exchange - redirect_uri: \(Config.googleRedirectURI)")
-        print("[NeverMiss] Token exchange - client_id: \(Config.googleClientID)")
-
         // Use a restricted character set for form URL encoding (RFC 3986)
         var allowedCharacters = CharacterSet.alphanumerics
         allowedCharacters.insert(charactersIn: "-._~")
@@ -188,19 +184,10 @@ class GoogleAuthService: NSObject {
             .joined(separator: "&")
             .data(using: .utf8)
 
-        if let bodyString = String(data: request.httpBody!, encoding: .utf8) {
-            print("[NeverMiss] Token exchange body: \(bodyString)")
-        }
-
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AuthError.invalidResponse
-        }
-
-        print("[NeverMiss] Token exchange response status: \(httpResponse.statusCode)")
-        if let responseString = String(data: data, encoding: .utf8) {
-            print("[NeverMiss] Token exchange response: \(responseString)")
         }
 
         guard httpResponse.statusCode == 200 else {

@@ -2,11 +2,15 @@ import Foundation
 
 class CalendarSyncService {
     private weak var appState: AppState?
-    private var authService: GoogleAuthService?
 
     init(appState: AppState) {
         self.appState = appState
-        self.authService = GoogleAuthService(appState: appState)
+    }
+
+    @MainActor
+    private func createAuthService() -> GoogleAuthService? {
+        guard let appState = appState else { return nil }
+        return GoogleAuthService(appState: appState)
     }
 
     func syncAllAccounts() async {
@@ -57,8 +61,10 @@ class CalendarSyncService {
         }
 
         // Update accounts with refreshed tokens
+        let finalAccountsToUpdate = accountsToUpdate
+        let finalAllEvents = allEvents
         await MainActor.run {
-            for (index, updatedAccount) in accountsToUpdate {
+            for (index, updatedAccount) in finalAccountsToUpdate {
                 if index < appState.accounts.count {
                     appState.accounts[index] = updatedAccount
                 }
@@ -66,12 +72,12 @@ class CalendarSyncService {
             appState.saveAccounts()
 
             // Update events
-            appState.events = allEvents
+            appState.events = finalAllEvents
         }
     }
 
     private func refreshToken(for account: GoogleAccount) async throws -> GoogleAccount {
-        guard let authService = authService else {
+        guard let authService = await createAuthService() else {
             throw AuthError.invalidResponse
         }
         return try await authService.refreshAccessToken(for: account)
@@ -96,6 +102,7 @@ class CalendarSyncService {
             Task {
                 appState.isAuthenticating = true
                 do {
+                    let authService = createAuthService()
                     let newAccount = try await authService?.authenticate()
                     if let newAccount = newAccount {
                         // Replace the old account
