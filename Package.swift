@@ -13,6 +13,7 @@ let package = Package(
         .executableTarget(
             name: "NeverMiss",
             path: "NeverMiss/Sources",
+            exclude: ["Config.template.swift"],
             resources: [
                 .process("../Info.plist")
             ],
