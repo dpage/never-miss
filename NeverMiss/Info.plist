@@ -39,5 +39,7 @@
     </array>
     <key>NSCalendarsUsageDescription</key>
     <string>NeverMiss needs access to display your calendar events</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
 </dict>
 </plist>
