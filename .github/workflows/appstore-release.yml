@@ -1,0 +1,219 @@
+name: App Store Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+env:
+  APP_NAME: NeverMiss
+  BUNDLE_ID: org.pgadmin.nevermiss
+
+jobs:
+  build:
+    name: Build App Store Release
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate Config.swift with secrets
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          # Validate secrets are set
+          if [ -z "$GOOGLE_CLIENT_ID" ]; then
+            echo "Error: GOOGLE_CLIENT_ID secret is not set"
+            exit 1
+          fi
+
+          # Generate Config.swift from template with real credentials
+          cat > NeverMiss/Sources/Config.swift << 'SWIFT_EOF'
+          import Foundation
+
+          struct Config {
+              static let googleClientID = "PLACEHOLDER_CLIENT_ID"
+              static let googleClientSecret = "PLACEHOLDER_CLIENT_SECRET"
+
+              static var googleRedirectURI: String {
+                  return "\(reversedClientID):/oauth2callback"
+              }
+
+              static var reversedClientID: String {
+                  let parts = googleClientID.components(separatedBy: ".")
+                  return parts.reversed().joined(separator: ".")
+              }
+
+              static let googleScopes = [
+                  "https://www.googleapis.com/auth/calendar.readonly",
+                  "https://www.googleapis.com/auth/calendar.events.readonly",
+                  "https://www.googleapis.com/auth/userinfo.email",
+                  "https://www.googleapis.com/auth/userinfo.profile"
+              ]
+
+              static let googleAuthURL = "https://accounts.google.com/o/oauth2/v2/auth"
+              static let googleTokenURL = "https://oauth2.googleapis.com/token"
+              static let googleUserInfoURL = "https://www.googleapis.com/oauth2/v2/userinfo"
+              static let googleCalendarBaseURL = "https://www.googleapis.com/calendar/v3"
+              static let bundleIdentifier = "org.pgadmin.nevermiss"
+          }
+          SWIFT_EOF
+
+          # Replace placeholders with actual secrets
+          sed -i '' "s|PLACEHOLDER_CLIENT_ID|$GOOGLE_CLIENT_ID|g" NeverMiss/Sources/Config.swift
+          sed -i '' "s|PLACEHOLDER_CLIENT_SECRET|$GOOGLE_CLIENT_SECRET|g" NeverMiss/Sources/Config.swift
+
+          echo "Config.swift generated successfully"
+
+      - name: Update version in Info.plist
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" NeverMiss/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" NeverMiss/Info.plist
+          echo "Updated Info.plist to version $VERSION"
+
+      - name: Install certificates
+        env:
+          APP_CERTIFICATE_BASE64: ${{ secrets.APPSTORE_APP_CERTIFICATE_BASE64 }}
+          APP_CERTIFICATE_PASSWORD: ${{ secrets.APPSTORE_APP_CERTIFICATE_PASSWORD }}
+          INSTALLER_CERTIFICATE_BASE64: ${{ secrets.APPSTORE_INSTALLER_CERTIFICATE_BASE64 }}
+          INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.APPSTORE_INSTALLER_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}
+        run: |
+          # Create variables
+          APP_CERT_PATH=$RUNNER_TEMP/app_certificate.p12
+          INSTALLER_CERT_PATH=$RUNNER_TEMP/installer_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          # Decode certificates
+          echo -n "$APP_CERTIFICATE_BASE64" | base64 --decode -o $APP_CERT_PATH
+          echo -n "$INSTALLER_CERTIFICATE_BASE64" | base64 --decode -o $INSTALLER_CERT_PATH
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import certificates to keychain
+          security import $APP_CERT_PATH -P "$APP_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security import $INSTALLER_CERT_PATH -P "$INSTALLER_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          # Verify certificates
+          echo "Available signing identities:"
+          security find-identity -v -p codesigning $KEYCHAIN_PATH
+
+      - name: Install provisioning profile
+        env:
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.APPSTORE_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          # Create Provisioning Profiles directory
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+
+          # Decode and install provisioning profile
+          PROFILE_PATH=~/Library/MobileDevice/Provisioning\ Profiles/appstore.provisionprofile
+          echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o "$PROFILE_PATH"
+
+          # Get the UUID from the profile
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< $(/usr/bin/security cms -D -i "$PROFILE_PATH"))
+          echo "Installed provisioning profile with UUID: $PROFILE_UUID"
+
+          # Rename to UUID
+          mv "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/$PROFILE_UUID.provisionprofile
+
+      - name: Build for App Store
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcodebuild clean archive \
+            -project NeverMiss.xcodeproj \
+            -scheme NeverMiss \
+            -configuration Release \
+            -archivePath build/NeverMiss.xcarchive \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGN_ENTITLEMENTS=NeverMiss/NeverMiss.appstore.entitlements \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER=""
+
+      - name: Export for App Store
+        run: |
+          # Create export options plist
+          cat > ExportOptions.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store-connect</string>
+              <key>destination</key>
+              <string>upload</string>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>signingCertificate</key>
+              <string>Apple Distribution</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>org.pgadmin.nevermiss</key>
+                  <string>NeverMiss Mac App Store</string>
+              </dict>
+          </dict>
+          </plist>
+          EOF
+
+          xcodebuild -exportArchive \
+            -archivePath build/NeverMiss.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist ExportOptions.plist
+
+      - name: Create pkg for manual upload
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+
+          # Create a signed pkg for App Store
+          productbuild \
+            --component build/NeverMiss.xcarchive/Products/Applications/NeverMiss.app /Applications \
+            --sign "3rd Party Mac Developer Installer" \
+            "build/NeverMiss-$VERSION-AppStore.pkg"
+
+          echo "Created App Store package:"
+          ls -la build/*.pkg
+
+      - name: Upload to App Store Connect
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          APPSTORE_API_KEY_BASE64: ${{ secrets.APPSTORE_API_KEY_BASE64 }}
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+
+          # Decode API key
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo -n "$APPSTORE_API_KEY_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
+
+          # Upload using xcrun altool or notarytool
+          xcrun altool --upload-app \
+            --type macos \
+            --file "build/NeverMiss-$VERSION-AppStore.pkg" \
+            --apiKey "$APPSTORE_API_KEY_ID" \
+            --apiIssuer "$APPSTORE_API_ISSUER_ID"
+
+          echo "✅ Uploaded to App Store Connect!"
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeverMiss-${{ github.event.inputs.version }}-AppStore
+          path: build/*.pkg
+          retention-days: 30
