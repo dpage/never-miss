@@ -166,16 +166,25 @@ jobs:
         run: |
           VERSION="${{ github.event.inputs.version }}"
 
-          # Decode API key
-          mkdir -p ~/.appstoreconnect/private_keys
-          echo -n "$APPSTORE_API_KEY_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
+          # Decode API key to multiple locations altool checks
+          mkdir -p ~/.private_keys
+          mkdir -p ~/private_keys
+          echo -n "$APPSTORE_API_KEY_BASE64" | base64 --decode > ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
+          cp ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8 ~/private_keys/
 
-          # Upload using xcrun altool or notarytool
+          # Verify the key file exists and has content
+          echo "API Key file created:"
+          ls -la ~/.private_keys/
+          echo "Key ID: $APPSTORE_API_KEY_ID"
+          echo "Issuer ID: $APPSTORE_API_ISSUER_ID"
+
+          # Upload using xcrun altool
           xcrun altool --upload-app \
             --type macos \
             --file "build/NeverMiss-$VERSION-AppStore.pkg" \
             --apiKey "$APPSTORE_API_KEY_ID" \
-            --apiIssuer "$APPSTORE_API_ISSUER_ID"
+            --apiIssuer "$APPSTORE_API_ISSUER_ID" \
+            --verbose
 
           echo "✅ Uploaded to App Store Connect!"
 
