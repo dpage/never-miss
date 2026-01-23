@@ -11,6 +11,10 @@ on:
         required: true
         default: '0.0.1'
 
+env:
+  APP_NAME: NeverMiss
+  BUNDLE_ID: com.nevermiss.app
+
 jobs:
   build:
     name: Build Release
@@ -86,7 +90,63 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" NeverMiss/Info.plist
           echo "Updated Info.plist to version $VERSION"
 
-      - name: Build Release
+      # Code signing setup (only if certificate is provided)
+      - name: Check if code signing is configured
+        id: signing
+        run: |
+          if [ -n "${{ secrets.APPLE_CERTIFICATE_BASE64 }}" ]; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Code signing not configured - building unsigned"
+          fi
+
+      - name: Install Apple certificate
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ github.run_id }}
+        run: |
+          # Create variables
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          # Decode certificate
+          echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import certificate to keychain
+          security import $CERTIFICATE_PATH -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          # Verify certificate
+          echo "Available signing identities:"
+          security find-identity -v -p codesigning $KEYCHAIN_PATH
+
+      - name: Build Release (Signed)
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcodebuild clean build \
+            -project NeverMiss.xcodeproj \
+            -scheme NeverMiss \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_ENTITLEMENTS=NeverMiss/NeverMiss.entitlements \
+            OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime"
+
+      - name: Build Release (Unsigned)
+        if: steps.signing.outputs.enabled != 'true'
         run: |
           xcodebuild clean build \
             -project NeverMiss.xcodeproj \
@@ -97,7 +157,52 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Package App
+      - name: Verify code signature
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          APP_PATH="build/Build/Products/Release/NeverMiss.app"
+          echo "Verifying code signature..."
+          codesign -vvv --deep --strict "$APP_PATH"
+          echo "Signature verification passed!"
+
+      - name: Notarize app
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          APP_PATH="build/Build/Products/Release/NeverMiss.app"
+
+          # Create a zip for notarization
+          echo "Creating zip for notarization..."
+          ditto -c -k --keepParent "$APP_PATH" "NeverMiss-notarize.zip"
+
+          # Submit for notarization
+          echo "Submitting for notarization..."
+          xcrun notarytool submit "NeverMiss-notarize.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --timeout 30m
+
+          # Staple the notarization ticket
+          echo "Stapling notarization ticket..."
+          xcrun stapler staple "$APP_PATH"
+
+          # Verify stapling
+          echo "Verifying stapled app..."
+          xcrun stapler validate "$APP_PATH"
+          spctl -a -vvv -t install "$APP_PATH"
+
+          # Clean up
+          rm "NeverMiss-notarize.zip"
+
+          echo "✅ Notarization complete!"
+
+      - name: Create DMG
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           APP_PATH="build/Build/Products/Release/NeverMiss.app"
@@ -112,26 +217,78 @@ jobs:
           # Create release directory
           mkdir -p release
 
-          # Create zip archive
+          # Create a temporary DMG staging directory
+          DMG_STAGING="dmg_staging"
+          mkdir -p "$DMG_STAGING"
+
+          # Copy app to staging
+          cp -R "$APP_PATH" "$DMG_STAGING/"
+
+          # Create symlink to Applications folder
+          ln -s /Applications "$DMG_STAGING/Applications"
+
+          # Create DMG
+          DMG_NAME="NeverMiss-$VERSION-macOS.dmg"
+          hdiutil create -volname "NeverMiss $VERSION" \
+            -srcfolder "$DMG_STAGING" \
+            -ov -format UDZO \
+            "release/$DMG_NAME"
+
+          # Also create a zip for those who prefer it
           cd build/Build/Products/Release
           zip -r "../../../../release/NeverMiss-$VERSION-macOS.zip" NeverMiss.app
           cd ../../../../
 
-          echo "Created release/NeverMiss-$VERSION-macOS.zip"
+          echo "Created release artifacts:"
           ls -la release/
+
+          # Clean up
+          rm -rf "$DMG_STAGING"
+
+      - name: Sign DMG
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DMG_PATH="release/NeverMiss-$VERSION-macOS.dmg"
+
+          # Sign the DMG
+          codesign --force --sign "Developer ID Application" --timestamp "$DMG_PATH"
+
+          # Notarize the DMG
+          echo "Notarizing DMG..."
+          xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait \
+            --timeout 30m
+
+          # Staple the DMG
+          xcrun stapler staple "$DMG_PATH"
+
+          echo "✅ DMG signed and notarized!"
+
+      - name: Clean up keychain
+        if: always() && steps.signing.outputs.enabled == 'true'
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: NeverMiss-${{ steps.version.outputs.version }}
-          path: release/NeverMiss-*.zip
+          path: release/NeverMiss-*
           retention-days: 30
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: release/NeverMiss-*.zip
+          files: release/NeverMiss-*
           draft: false
           prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
           generate_release_notes: true
