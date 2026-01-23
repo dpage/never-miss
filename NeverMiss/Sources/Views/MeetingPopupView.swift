@@ -1,22 +1,82 @@
 import SwiftUI
 import AppKit
 
+enum MeetingStatus {
+    case upcoming
+    case inProgress
+    case finished
+}
+
 struct MeetingPopupView: View {
     let event: CalendarEvent
     let onDismiss: () -> Void
     let onJoin: () -> Void
+
+    @State private var currentTime = Date()
+
+    // Timer to update the countdown
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var meetingStatus: MeetingStatus {
+        let now = currentTime
+        if now >= event.endTime {
+            return .finished
+        } else if now >= event.startTime {
+            return .inProgress
+        } else {
+            return .upcoming
+        }
+    }
+
+    private var statusText: String {
+        switch meetingStatus {
+        case .upcoming: return "Meeting Starting Soon"
+        case .inProgress: return "Meeting In Progress"
+        case .finished: return "Meeting Finished"
+        }
+    }
+
+    private var statusIcon: String {
+        switch meetingStatus {
+        case .upcoming: return "bell.fill"
+        case .inProgress: return "video.fill"
+        case .finished: return "checkmark.circle.fill"
+        }
+    }
+
+    private var chipText: String {
+        switch meetingStatus {
+        case .upcoming:
+            return TimeFormatting.relativeTime(to: event.startTime)
+        case .inProgress:
+            return "In progress"
+        case .finished:
+            return "Finished"
+        }
+    }
+
+    private var gradientColors: [Color] {
+        switch meetingStatus {
+        case .upcoming:
+            return [Color.blue, Color.purple]
+        case .inProgress:
+            return [Color.green, Color.teal]
+        case .finished:
+            return [Color.orange, Color.red]
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             // Header with gradient
             VStack(spacing: 8) {
                 HStack {
-                    Image(systemName: "bell.fill")
+                    Image(systemName: statusIcon)
                         .font(.system(size: 16))
-                    Text("Meeting Starting Soon")
+                    Text(statusText)
                         .font(.system(size: 14, weight: .medium))
                     Spacer()
-                    Text(TimeFormatting.relativeTime(to: event.startTime))
+                    Text(chipText)
                         .font(.system(size: 14, weight: .bold))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 4)
@@ -28,11 +88,14 @@ struct MeetingPopupView: View {
             .padding(20)
             .background(
                 LinearGradient(
-                    colors: [Color.blue, Color.purple],
+                    colors: gradientColors,
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
             )
+            .onReceive(timer) { _ in
+                currentTime = Date()
+            }
 
             // Content
             VStack(alignment: .leading, spacing: 16) {
@@ -45,9 +108,13 @@ struct MeetingPopupView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "clock")
                         .foregroundColor(.secondary)
-                    Text(TimeFormatting.timeRange(start: event.startTime, end: event.endTime))
-                    Text("(\(TimeFormatting.duration(from: event.startTime, to: event.endTime)))")
-                        .foregroundColor(.secondary)
+                    if event.isAllDay {
+                        Text("All day")
+                    } else {
+                        Text(TimeFormatting.timeRange(start: event.startTime, end: event.endTime))
+                        Text("(\(TimeFormatting.duration(from: event.startTime, to: event.endTime)))")
+                            .foregroundColor(.secondary)
+                    }
                 }
                 .font(.system(size: 14))
 
@@ -277,14 +344,11 @@ class MeetingPopupWindowController {
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        // Center on screen
-        if let screen = NSScreen.main {
-            let screenFrame = screen.visibleFrame
-            let windowFrame = window.frame
-            let x = screenFrame.midX - windowFrame.width / 2
-            let y = screenFrame.midY - windowFrame.height / 2
-            window.setFrameOrigin(NSPoint(x: x, y: y))
-        }
+        // Set the content size first
+        window.setContentSize(NSSize(width: 450, height: 500))
+
+        // Center on the main screen
+        window.center()
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
