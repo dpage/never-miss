@@ -180,11 +180,19 @@ jobs:
           echo -n "$APPSTORE_API_KEY_BASE64" | base64 --decode > ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
           cp ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8 ~/private_keys/
 
-          # Verify the key file exists and has content
+          # Verify the key file exists and has correct format
           echo "API Key file created:"
           ls -la ~/.private_keys/
           echo "Key ID: $APPSTORE_API_KEY_ID"
           echo "Issuer ID: $APPSTORE_API_ISSUER_ID"
+
+          # Debug: Check key file format (first and last lines only - don't expose key content)
+          echo "Key file first line:"
+          head -1 ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
+          echo "Key file last line:"
+          tail -1 ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
+          echo "Key file line count:"
+          wc -l ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
 
           # Upload using xcrun altool
           xcrun altool --upload-app \
