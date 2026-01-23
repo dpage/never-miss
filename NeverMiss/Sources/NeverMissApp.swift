@@ -95,7 +95,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         // Observe app state changes to update menu bar
-        appState.$nextMeetings
+        appState.$timedMeetings
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateMenuBarTitle()
+            }
+            .store(in: &appState.cancellables)
+
+        appState.$allDayEvents
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.updateMenuBarTitle()
@@ -132,18 +139,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func updateMenuBarTitle() {
         guard let button = statusItem?.button else { return }
 
-        let meetings = appState.nextMeetings
+        let timedMeetings = appState.timedMeetings
+        let allDayEvents = appState.allDayEvents
 
-        if meetings.isEmpty {
+        // Prioritize timed meetings over all-day events
+        if timedMeetings.isEmpty && allDayEvents.isEmpty {
             button.title = "No upcoming meetings"
-        } else if meetings.count == 1 {
-            let meeting = meetings[0]
-            let timeString = TimeFormatting.relativeTime(to: meeting.startTime)
-            button.title = "\(meeting.title) \(timeString)"
+        } else if timedMeetings.isEmpty {
+            // Only all-day events
+            if allDayEvents.count == 1 {
+                button.title = "\(allDayEvents[0].title) (All day)"
+            } else {
+                button.title = "\(allDayEvents.count) all-day events"
+            }
         } else {
-            // Check if multiple meetings start at the same time
-            let firstStartTime = meetings[0].startTime
-            let sameTiMeetings = meetings.filter {
+            // Show timed meetings (prioritize over all-day)
+            let firstStartTime = timedMeetings[0].startTime
+            let sameTiMeetings = timedMeetings.filter {
                 abs($0.startTime.timeIntervalSince(firstStartTime)) < 60
             }
 
@@ -151,7 +163,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let timeString = TimeFormatting.relativeTime(to: firstStartTime)
                 button.title = "\(sameTiMeetings.count) meetings \(timeString)"
             } else {
-                let meeting = meetings[0]
+                let meeting = timedMeetings[0]
                 let timeString = TimeFormatting.relativeTime(to: meeting.startTime)
                 button.title = "\(meeting.title) \(timeString)"
             }
@@ -178,18 +190,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 class AppState: ObservableObject {
     @Published var accounts: [GoogleAccount] = []
     @Published var events: [CalendarEvent] = []
-    @Published var nextMeetings: [CalendarEvent] = []
+    @Published var nextMeetings: [CalendarEvent] = []      // All upcoming (for compatibility)
+    @Published var allDayEvents: [CalendarEvent] = []      // All-day events (reminders, birthdays)
+    @Published var timedMeetings: [CalendarEvent] = []     // Timed meetings (with specific times)
     @Published var settings: AppSettings = AppSettings.load()
     @Published var isAuthenticating: Bool = false
+    @Published var dismissedEventIds: Set<String> = []
 
     var cancellables = Set<AnyCancellable>()
 
+    private let dismissedEventsKey = "dismissedEventIds"
+
     init() {
         loadAccounts()
+        loadDismissedEvents()
         updateNextMeetings()
 
         // Update next meetings when events change
         $events
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateNextMeetings()
+            }
+            .store(in: &cancellables)
+
+        // Also update when dismissed events change
+        $dismissedEventIds
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.updateNextMeetings()
@@ -205,14 +231,43 @@ class AppState: ObservableObject {
         GoogleAccount.saveAll(accounts)
     }
 
+    func loadDismissedEvents() {
+        if let ids = UserDefaults.standard.array(forKey: dismissedEventsKey) as? [String] {
+            dismissedEventIds = Set(ids)
+        }
+    }
+
+    func dismissEvent(_ eventId: String) {
+        dismissedEventIds.insert(eventId)
+        UserDefaults.standard.set(Array(dismissedEventIds), forKey: dismissedEventsKey)
+    }
+
+    func undismissEvent(_ eventId: String) {
+        dismissedEventIds.remove(eventId)
+        UserDefaults.standard.set(Array(dismissedEventIds), forKey: dismissedEventsKey)
+    }
+
+    func clearDismissedEvents() {
+        dismissedEventIds.removeAll()
+        UserDefaults.standard.removeObject(forKey: dismissedEventsKey)
+    }
+
     func updateNextMeetings() {
         let now = Date()
+        let todayStart = Calendar.current.startOfDay(for: now)
+        let cutoff = now.addingTimeInterval(24 * 60 * 60)
+
         let filtered = events
             .filter { event in
+                // Exclude dismissed events
+                guard !dismissedEventIds.contains(event.id) else { return false }
+
                 // Include future events OR in-progress events (started but not ended)
                 let isFuture = event.startTime > now
                 let isInProgress = event.startTime <= now && event.endTime > now
-                guard isFuture || isInProgress else { return false }
+                // For all-day events, check if they're today or future
+                let isAllDayToday = event.isAllDay && event.startTime >= todayStart
+                guard isFuture || isInProgress || isAllDayToday else { return false }
 
                 // Filter by accepted status if enabled
                 if settings.showOnlyAccepted {
@@ -222,9 +277,12 @@ class AppState: ObservableObject {
             }
             .sorted { $0.startTime < $1.startTime }
 
-        // Get meetings starting within the next 24 hours (or currently in progress)
-        let cutoff = now.addingTimeInterval(24 * 60 * 60)
-        nextMeetings = Array(filtered.filter { $0.startTime < cutoff || $0.endTime > now }.prefix(10))
+        // Separate all-day events from timed events
+        allDayEvents = filtered.filter { $0.isAllDay && $0.startTime < cutoff }
+        timedMeetings = Array(filtered.filter { !$0.isAllDay && ($0.startTime < cutoff || $0.endTime > now) }.prefix(10))
+
+        // Combined list (timed first, then all-day) for compatibility
+        nextMeetings = timedMeetings + allDayEvents
     }
 }
 

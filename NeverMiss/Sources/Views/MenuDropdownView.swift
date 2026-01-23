@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuDropdownView: View {
     @EnvironmentObject var appState: AppState
+    @State private var isRefreshing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -10,6 +11,18 @@ struct MenuDropdownView: View {
                 Text("Upcoming Meetings")
                     .font(.headline)
                 Spacer()
+
+                // Refresh button
+                Button(action: refreshCalendars) {
+                    Image(systemName: "arrow.clockwise")
+                        .foregroundColor(.secondary)
+                        .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                        .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+                }
+                .buttonStyle(.plain)
+                .disabled(isRefreshing)
+                .help("Refresh calendars")
+
                 Button(action: {
                     NotificationCenter.default.post(name: .openSettings, object: nil)
                 }) {
@@ -42,7 +55,7 @@ struct MenuDropdownView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(24)
-            } else if appState.nextMeetings.isEmpty {
+            } else if appState.timedMeetings.isEmpty && appState.allDayEvents.isEmpty {
                 // No upcoming meetings
                 VStack(spacing: 12) {
                     Image(systemName: "calendar")
@@ -57,14 +70,40 @@ struct MenuDropdownView: View {
                 .frame(maxWidth: .infinity)
                 .padding(24)
             } else {
-                // Meeting list
+                // Meeting list with sections
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(appState.nextMeetings) { event in
-                            MeetingRowView(event: event)
-                            if event.id != appState.nextMeetings.last?.id {
+                        // Timed meetings section
+                        if !appState.timedMeetings.isEmpty {
+                            ForEach(appState.timedMeetings) { event in
+                                MeetingRowView(event: event, onDismiss: {
+                                    appState.dismissEvent(event.id)
+                                })
                                 Divider()
                                     .padding(.leading, 16)
+                            }
+                        }
+
+                        // All-day events section
+                        if !appState.allDayEvents.isEmpty {
+                            if !appState.timedMeetings.isEmpty {
+                                // Section header
+                                Text("All-Day Events")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 16)
+                                    .padding(.top, 12)
+                                    .padding(.bottom, 4)
+                            }
+
+                            ForEach(appState.allDayEvents) { event in
+                                MeetingRowView(event: event, onDismiss: {
+                                    appState.dismissEvent(event.id)
+                                })
+                                if event.id != appState.allDayEvents.last?.id {
+                                    Divider()
+                                        .padding(.leading, 16)
+                                }
                             }
                         }
                     }
@@ -96,6 +135,17 @@ struct MenuDropdownView: View {
             .padding(.vertical, 10)
         }
         .frame(width: 360)
+    }
+
+    private func refreshCalendars() {
+        Task {
+            isRefreshing = true
+            let syncService = CalendarSyncService(appState: appState)
+            await syncService.syncAllAccounts()
+            await MainActor.run {
+                isRefreshing = false
+            }
+        }
     }
 
     private func addAccount() {
@@ -135,6 +185,9 @@ struct MenuDropdownView: View {
 
 struct MeetingRowView: View {
     let event: CalendarEvent
+    var onDismiss: (() -> Void)?
+
+    @State private var isHovering = false
 
     private var isInProgress: Bool {
         let now = Date()
@@ -155,10 +208,25 @@ struct MeetingRowView: View {
 
                 Spacer()
 
+                // Show dismiss button on hover
+                if isHovering, let onDismiss = onDismiss {
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Dismiss this event")
+                }
+
                 if isInProgress {
                     Text("In progress")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.green)
+                } else if event.isAllDay {
+                    Text("All day")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
                 } else {
                     Text(TimeFormatting.relativeTime(to: event.startTime))
                         .font(.system(size: 12))
@@ -167,18 +235,15 @@ struct MeetingRowView: View {
             }
 
             HStack {
-                if event.isAllDay {
-                    Text("All day")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                } else {
+                if !event.isAllDay {
                     Text(TimeFormatting.timeRange(start: event.startTime, end: event.endTime))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
 
+                Spacer()
+
                 if event.hasConferenceLink {
-                    Spacer()
                     Button(action: {
                         joinMeeting()
                     }) {
@@ -219,6 +284,9 @@ struct MeetingRowView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovering = hovering
+        }
         .onTapGesture {
             if let htmlLink = event.htmlLink, let url = URL(string: htmlLink) {
                 NSWorkspace.shared.open(url)
