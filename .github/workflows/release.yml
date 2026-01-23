@@ -142,6 +142,7 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
             CODE_SIGN_ENTITLEMENTS=NeverMiss/NeverMiss.entitlements \
             OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime"
 
