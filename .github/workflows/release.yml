@@ -145,8 +145,10 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
           # Create processed entitlements with expanded variables
-          # $(AppIdentifierPrefix) needs to be replaced with TeamID.
-          sed "s/\$(AppIdentifierPrefix)/${APPLE_TEAM_ID}./g" \
+          # $(AppIdentifierPrefix) = TeamID. (with period)
+          # $(TeamIdentifierPrefix) = TeamID (without period)
+          sed -e "s/\$(AppIdentifierPrefix)/${APPLE_TEAM_ID}./g" \
+              -e "s/\$(TeamIdentifierPrefix)/${APPLE_TEAM_ID}/g" \
             NeverMiss/NeverMiss.entitlements > build/processed.entitlements
 
           echo "Processed entitlements:"
