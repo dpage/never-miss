@@ -94,6 +94,152 @@ static let googleClientSecret = "GOCSPX-your-client-secret"  // or empty string 
 xcodebuild -project NeverMiss.xcodeproj -scheme NeverMiss -configuration Release build
 ```
 
+## Mac App Store Distribution
+
+This section documents how to set up automated App Store distribution via GitHub Actions.
+
+### Prerequisites
+
+- Apple Developer Program membership ($99/year)
+- App Store Connect access
+- GitHub repository with Actions enabled
+
+### Step 1: Register an App ID
+
+1. Go to [Apple Developer Portal](https://developer.apple.com/account) → Certificates, Identifiers & Profiles
+2. Click **Identifiers** → **+** button
+3. Select **App IDs** → Continue
+4. Select **App** → Continue
+5. Enter:
+   - **Description**: NeverMiss
+   - **Bundle ID**: Explicit → `page.conx.nevermiss` (or your chosen bundle ID)
+6. Enable **App Sandbox** under Capabilities
+7. Click **Continue** → **Register**
+
+### Step 2: Create Certificates
+
+You need two certificates for App Store distribution:
+
+#### Mac App Distribution Certificate
+1. On your Mac, open **Keychain Access**
+2. Go to **Keychain Access** → **Certificate Assistant** → **Request a Certificate From a Certificate Authority**
+3. Enter your email, leave CA Email blank, select **Saved to disk**
+4. Save the `.certSigningRequest` file
+5. In Apple Developer Portal → **Certificates** → **+**
+6. Select **Mac App Distribution** → Continue
+7. Upload your CSR file → Continue → Download
+8. Double-click the `.cer` file to install in Keychain
+
+#### Mac Installer Distribution Certificate
+1. Repeat the same process, but select **Mac Installer Distribution** instead
+
+#### Export Certificates for GitHub Actions
+1. In Keychain Access, find **3rd Party Mac Developer Application: [Your Name]**
+2. Right-click → **Export** → Save as `.p12` with a strong password
+3. Repeat for **3rd Party Mac Developer Installer: [Your Name]**
+4. Base64 encode both:
+   ```bash
+   base64 -i application.p12 | pbcopy  # Copy to clipboard
+   base64 -i installer.p12 | pbcopy
+   ```
+
+### Step 3: Create Provisioning Profile
+
+1. Apple Developer Portal → **Profiles** → **+**
+2. Select **Mac App Store Connect** → Continue
+3. Select your App ID → Continue
+4. Select your **Mac App Distribution** certificate → Continue
+5. Name it (e.g., "NeverMiss App Store") → Generate → Download
+6. Base64 encode it:
+   ```bash
+   base64 -i NeverMiss_App_Store.provisionprofile | pbcopy
+   ```
+
+### Step 4: Create App Store Connect API Key
+
+1. Go to [App Store Connect](https://appstoreconnect.apple.com) → Users and Access → Integrations → App Store Connect API
+2. Click **+** to generate a new key
+3. Name: "GitHub Actions", Access: **App Manager**
+4. Download the `.p8` file (you can only download once!)
+5. Note the **Key ID** shown in the table
+6. Note the **Issuer ID** at the top of the page (UUID format)
+7. Base64 encode the key:
+   ```bash
+   base64 -i AuthKey_XXXXXXXXXX.p8 | pbcopy
+   ```
+
+### Step 5: Create App in App Store Connect
+
+1. App Store Connect → Apps → **+** → **New App**
+2. Select **macOS** platform
+3. Enter:
+   - **Name**: Your app's display name (must be unique on App Store)
+   - **Primary Language**: English (or your preference)
+   - **Bundle ID**: Select your registered App ID
+   - **SKU**: A unique identifier (e.g., `nevermiss`)
+4. Click **Create**
+
+### Step 6: Configure GitHub Secrets
+
+Add these secrets to your repository (Settings → Secrets and variables → Actions):
+
+| Secret | Description |
+|--------|-------------|
+| `APPSTORE_CERTIFICATE_BASE64` | Base64-encoded Mac App Distribution `.p12` |
+| `APPSTORE_CERTIFICATE_PASSWORD` | Password for the distribution certificate |
+| `APPSTORE_INSTALLER_CERTIFICATE_BASE64` | Base64-encoded Mac Installer Distribution `.p12` |
+| `APPSTORE_INSTALLER_CERTIFICATE_PASSWORD` | Password for the installer certificate |
+| `APPSTORE_PROVISIONING_PROFILE_BASE64` | Base64-encoded provisioning profile |
+| `APPSTORE_API_KEY_ID` | App Store Connect API Key ID |
+| `APPSTORE_API_ISSUER_ID` | App Store Connect Issuer ID (UUID) |
+| `APPSTORE_API_KEY_BASE64` | Base64-encoded `.p8` API key file |
+| `GOOGLE_CLIENT_ID` | Your Google OAuth Client ID |
+
+### Step 7: Run the Workflow
+
+1. Go to Actions → **App Store Release**
+2. Click **Run workflow**
+3. Enter the version number (e.g., `1.0.1`)
+4. Click **Run workflow**
+
+The workflow will:
+- Build the app with App Sandbox entitlements
+- Sign it with your Mac App Distribution certificate
+- Create a signed `.pkg` installer
+- Upload to App Store Connect
+
+### Step 8: Submit for Review
+
+1. In App Store Connect, go to your app
+2. Wait for the build to finish processing (5-30 minutes)
+3. Select the build under the macOS section
+4. Fill in required metadata (screenshots, description, etc.)
+5. Submit for App Review
+
+### Info.plist Requirements
+
+The following keys are required for App Store submission:
+
+```xml
+<key>LSApplicationCategoryType</key>
+<string>public.app-category.productivity</string>
+<key>ITSAppUsesNonExemptEncryption</key>
+<false/>
+```
+
+### Troubleshooting
+
+#### "No suitable application records were found"
+The app doesn't exist in App Store Connect. Create it first (Step 5).
+
+#### "Bundle version must be higher than previously uploaded"
+You've already uploaded this version. Increment the version number.
+
+#### Authentication errors (401)
+- Ensure you're using a **Team Key** (not Individual Key) from App Store Connect
+- Verify the Key ID and Issuer ID are correct
+- Check the `.p8` file was base64 encoded correctly
+
 ## Usage
 
 1. **Launch the app** - It will appear as an icon in your menu bar
