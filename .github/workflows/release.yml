@@ -15,6 +15,9 @@ env:
   APP_NAME: NeverMiss
   BUNDLE_ID: com.nevermiss.app
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Release
