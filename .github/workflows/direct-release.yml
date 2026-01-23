@@ -1,4 +1,4 @@
-name: Build and Release
+name: Direct Distribution Release
 
 on:
   push:
@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Release
+    name: Build Direct Distribution Release
     runs-on: macos-latest
 
     steps:
@@ -36,6 +36,10 @@ jobs:
             # Extract version from tag (remove 'v' prefix)
             echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
           fi
+
+      - name: Install create-dmg
+        run: |
+          brew install create-dmg
 
       - name: Generate Config.swift with secrets
         env:
@@ -134,10 +138,7 @@ jobs:
 
       - name: Build Release (Signed)
         if: steps.signing.outputs.enabled == 'true'
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # Build without code signing first
           xcodebuild clean build \
             -project NeverMiss.xcodeproj \
             -scheme NeverMiss \
@@ -147,22 +148,12 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
-          # Create processed entitlements with expanded variables
-          # $(AppIdentifierPrefix) = TeamID. (with period)
-          # $(TeamIdentifierPrefix) = TeamID (without period)
-          sed -e "s/\$(AppIdentifierPrefix)/${APPLE_TEAM_ID}./g" \
-              -e "s/\$(TeamIdentifierPrefix)/${APPLE_TEAM_ID}/g" \
-            NeverMiss/NeverMiss.entitlements > build/processed.entitlements
-
-          echo "Processed entitlements:"
-          cat build/processed.entitlements
-
-          # Then sign the app manually with codesign
+          # Sign the app manually with codesign
           APP_PATH="build/Build/Products/Release/NeverMiss.app"
 
           echo "Signing app with Developer ID..."
           codesign --force --deep --sign "Developer ID Application" \
-            --entitlements build/processed.entitlements \
+            --entitlements NeverMiss/NeverMiss.entitlements \
             --options runtime \
             --timestamp \
             "$APP_PATH"
@@ -234,22 +225,39 @@ jobs:
           # Create release directory
           mkdir -p release
 
-          # Create a temporary DMG staging directory
-          DMG_STAGING="dmg_staging"
-          mkdir -p "$DMG_STAGING"
-
-          # Copy app to staging
-          cp -R "$APP_PATH" "$DMG_STAGING/"
-
-          # Create symlink to Applications folder
-          ln -s /Applications "$DMG_STAGING/Applications"
-
-          # Create DMG
+          # Create a professional DMG with create-dmg
           DMG_NAME="NeverMiss-$VERSION-macOS.dmg"
-          hdiutil create -volname "NeverMiss $VERSION" \
-            -srcfolder "$DMG_STAGING" \
-            -ov -format UDZO \
-            "release/$DMG_NAME"
+
+          # create-dmg will fail if DMG already exists
+          rm -f "release/$DMG_NAME"
+
+          create-dmg \
+            --volname "NeverMiss $VERSION" \
+            --volicon "$APP_PATH/Contents/Resources/AppIcon.icns" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "NeverMiss.app" 150 185 \
+            --hide-extension "NeverMiss.app" \
+            --app-drop-link 450 185 \
+            --no-internet-enable \
+            "release/$DMG_NAME" \
+            "$APP_PATH" \
+            || true  # create-dmg returns non-zero even on success sometimes
+
+          # Verify DMG was created
+          if [ ! -f "release/$DMG_NAME" ]; then
+            echo "create-dmg failed, falling back to basic DMG creation"
+            DMG_STAGING="dmg_staging"
+            mkdir -p "$DMG_STAGING"
+            cp -R "$APP_PATH" "$DMG_STAGING/"
+            ln -s /Applications "$DMG_STAGING/Applications"
+            hdiutil create -volname "NeverMiss $VERSION" \
+              -srcfolder "$DMG_STAGING" \
+              -ov -format UDZO \
+              "release/$DMG_NAME"
+            rm -rf "$DMG_STAGING"
+          fi
 
           # Also create a zip for those who prefer it
           cd build/Build/Products/Release
@@ -258,9 +266,6 @@ jobs:
 
           echo "Created release artifacts:"
           ls -la release/
-
-          # Clean up
-          rm -rf "$DMG_STAGING"
 
       - name: Sign DMG
         if: steps.signing.outputs.enabled == 'true'
@@ -297,7 +302,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NeverMiss-${{ steps.version.outputs.version }}
+          name: NeverMiss-${{ steps.version.outputs.version }}-direct
           path: release/NeverMiss-*
           retention-days: 30
 
@@ -309,5 +314,17 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
           generate_release_notes: true
+          body: |
+            ## Direct Download Release
+
+            This is the Developer ID signed release for direct distribution (outside the Mac App Store).
+
+            ### Installation
+            1. Download the DMG file
+            2. Open the DMG
+            3. Drag NeverMiss to your Applications folder
+            4. Launch NeverMiss from Applications
+
+            **Note:** On first launch, you may need to right-click and select "Open" to bypass Gatekeeper.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
