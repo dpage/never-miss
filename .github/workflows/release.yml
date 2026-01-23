@@ -134,17 +134,28 @@ jobs:
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          # Build without code signing first
           xcodebuild clean build \
             -project NeverMiss.xcodeproj \
             -scheme NeverMiss \
             -configuration Release \
             -derivedDataPath build \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Developer ID Application" \
-            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            CODE_SIGN_ENTITLEMENTS=NeverMiss/NeverMiss.entitlements \
-            OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime"
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+          # Then sign the app manually with codesign
+          APP_PATH="build/Build/Products/Release/NeverMiss.app"
+
+          echo "Signing app with Developer ID..."
+          codesign --force --deep --sign "Developer ID Application" \
+            --entitlements NeverMiss/NeverMiss.entitlements \
+            --options runtime \
+            --timestamp \
+            "$APP_PATH"
+
+          echo "Verifying signature..."
+          codesign -vvv --deep --strict "$APP_PATH"
 
       - name: Build Release (Unsigned)
         if: steps.signing.outputs.enabled != 'true'
@@ -157,14 +168,6 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
-
-      - name: Verify code signature
-        if: steps.signing.outputs.enabled == 'true'
-        run: |
-          APP_PATH="build/Build/Products/Release/NeverMiss.app"
-          echo "Verifying code signature..."
-          codesign -vvv --deep --strict "$APP_PATH"
-          echo "Signature verification passed!"
 
       - name: Notarize app
         if: steps.signing.outputs.enabled == 'true'
