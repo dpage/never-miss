@@ -39,5 +39,5 @@ struct Config {
     static let googleCalendarBaseURL = "https://www.googleapis.com/calendar/v3"
 
     // App bundle identifier
-    static let bundleIdentifier = "org.pgadmin.nevermiss"
+    static let bundleIdentifier = "page.conx.nevermiss"
 }

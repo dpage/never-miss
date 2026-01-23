@@ -10,7 +10,7 @@ on:
 
 env:
   APP_NAME: NeverMiss
-  BUNDLE_ID: org.pgadmin.nevermiss
+  BUNDLE_ID: page.conx.nevermiss
 
 jobs:
   build:
@@ -60,7 +60,7 @@ jobs:
               static let googleTokenURL = "https://oauth2.googleapis.com/token"
               static let googleUserInfoURL = "https://www.googleapis.com/oauth2/v2/userinfo"
               static let googleCalendarBaseURL = "https://www.googleapis.com/calendar/v3"
-              static let bundleIdentifier = "org.pgadmin.nevermiss"
+              static let bundleIdentifier = "page.conx.nevermiss"
           }
           SWIFT_EOF
 
@@ -159,7 +159,6 @@ jobs:
           ls -la build/*.pkg
 
       - name: Upload to App Store Connect
-        continue-on-error: true
         env:
           APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
           APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
@@ -169,38 +168,23 @@ jobs:
 
           # Check if API key secrets are configured
           if [ -z "$APPSTORE_API_KEY_BASE64" ] || [ -z "$APPSTORE_API_KEY_ID" ] || [ -z "$APPSTORE_API_ISSUER_ID" ]; then
-            echo "⚠️ App Store Connect API credentials not fully configured"
-            echo "Download the pkg artifact and upload manually via Transporter app"
-            exit 0
+            echo "❌ App Store Connect API credentials not configured"
+            echo "Required secrets: APPSTORE_API_KEY_ID, APPSTORE_API_ISSUER_ID, APPSTORE_API_KEY_BASE64"
+            exit 1
           fi
 
-          # Decode API key to multiple locations altool checks
+          # Decode API key to locations altool checks
           mkdir -p ~/.private_keys
           mkdir -p ~/private_keys
           echo -n "$APPSTORE_API_KEY_BASE64" | base64 --decode > ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
           cp ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8 ~/private_keys/
-
-          # Verify the key file exists and has correct format
-          echo "API Key file created:"
-          ls -la ~/.private_keys/
-          echo "Key ID: $APPSTORE_API_KEY_ID"
-          echo "Issuer ID: $APPSTORE_API_ISSUER_ID"
-
-          # Debug: Check key file format (first and last lines only - don't expose key content)
-          echo "Key file first line:"
-          head -1 ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
-          echo "Key file last line:"
-          tail -1 ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
-          echo "Key file line count:"
-          wc -l ~/.private_keys/AuthKey_$APPSTORE_API_KEY_ID.p8
 
           # Upload using xcrun altool
           xcrun altool --upload-app \
             --type macos \
             --file "build/NeverMiss-$VERSION-AppStore.pkg" \
             --apiKey "$APPSTORE_API_KEY_ID" \
-            --apiIssuer "$APPSTORE_API_ISSUER_ID" \
-            --verbose
+            --apiIssuer "$APPSTORE_API_ISSUER_ID"
 
           echo "✅ Uploaded to App Store Connect!"
 
