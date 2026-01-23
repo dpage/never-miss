@@ -144,12 +144,20 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
 
+          # Create processed entitlements with expanded variables
+          # $(AppIdentifierPrefix) needs to be replaced with TeamID.
+          sed "s/\$(AppIdentifierPrefix)/${APPLE_TEAM_ID}./g" \
+            NeverMiss/NeverMiss.entitlements > build/processed.entitlements
+
+          echo "Processed entitlements:"
+          cat build/processed.entitlements
+
           # Then sign the app manually with codesign
           APP_PATH="build/Build/Products/Release/NeverMiss.app"
 
           echo "Signing app with Developer ID..."
           codesign --force --deep --sign "Developer ID Application" \
-            --entitlements NeverMiss/NeverMiss.entitlements \
+            --entitlements build/processed.entitlements \
             --options runtime \
             --timestamp \
             "$APP_PATH"
