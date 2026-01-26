@@ -20,7 +20,7 @@ A native macOS menu bar application that connects to multiple Google Calendar ac
 
 ## Google Cloud Setup
 
-Before using NeverMiss, you need to create Google Cloud credentials:
+Before hacking on NeverMiss, you need to create Google Cloud credentials:
 
 ### Step 1: Create a Google Cloud Project
 
